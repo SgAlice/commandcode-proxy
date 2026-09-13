@@ -1,6 +1,6 @@
-# Private maintained copy
+# Personally maintained fork
 
-This repository is an independent private snapshot of
+This repository is a personally maintained public fork of
 [MAXeaglet/commandcode-proxy](https://github.com/MAXeaglet/commandcode-proxy),
 based on upstream commit `407040df375ad031553cb10d948329c091c5b28c`.
 The original MIT license and upstream documentation are retained.
@@ -19,24 +19,39 @@ silently discarding `input_image` blocks. This copy includes the deployed fix:
 - Return a clear HTTP 400 for images with missing/invalid URLs, including
   unsupported `file_id`-only inputs, instead of silently discarding them.
 
-Patched `proxy.mjs` SHA-256:
-`081d15355cfd7ae11b5afa1ea60bf29d9af0c23eb79937511551b8412bcb6f41`
+## Responses tool-image fix (2026-09-14)
+
+Codex `view_image` returns `input_image` blocks inside
+`function_call_output.output`. Previously these were serialized as text, sending
+base64 to the language context instead of the vision input.
+
+The adapter now keeps the tool result and call ID, and attaches the original
+image/text blocks as explicitly labeled tool data using CC's supported user
+image format. Attachments are emitted after the adjacent tool-result batch so
+parallel tool calls remain paired before the next user/assistant message.
+Invalid image URLs fail locally with HTTP 400. Ordinary tool outputs are unchanged.
+This is a compatibility representation, not native multimodal tool-result support.
 
 ## Validation
 
-18 network-isolated mock regression tests passed. Live tests with
+26 network-isolated mock regression tests passed (including tool images, mixed
+content, parallel results, malformed tool images, and both streaming modes). Earlier live tests with
 `deepseek/deepseek-v4.1-flash` also passed for direct non-streaming Responses
 and streaming Responses through an Aether gateway, correctly recognizing a
 generated diagnostic image containing a red circle and a blue square.
+
+The tool-image fix was separately tested against the real model with a synthetic
+left-red/right-blue image in a `function_call_output`, using both streaming and
+non-streaming Responses. Both completed and correctly identified the colors.
 
 Re-run the mock tests without credentials or external network access:
 
 ```sh
 docker build -t commandcode-proxy-private:test .
-docker run --rm -i --network none --read-only --user node \
+docker run --rm --network none --read-only --user node \
   --cap-drop ALL --security-opt no-new-privileges:true \
-  --entrypoint node commandcode-proxy-private:test --input-type=module \
-  < tests/responses-images.mjs
+  -v "$PWD/tests:/app/tests:ro" \
+  --entrypoint node commandcode-proxy-private:test /app/tests/responses-images.mjs
 ```
 
 ## Local-only deployment
@@ -57,11 +72,11 @@ is the upstream sample with an empty API key. Supply credentials through request
 headers; do not commit real secrets into the sample.
 
 The upstream automatic container-publishing workflow was intentionally omitted
-from this private snapshot to avoid unintended package publication.
+from this fork to avoid unintended package publication.
 
 ## Future updates
 
 This is a local patch, not an upstream release. Before replacing the code with
 a newer upstream version, preserve or merge the Responses image-input fix and
-re-run the regression tests above. The initial upstream Git history is not
-copied; the source commit is recorded above for comparison.
+re-run the regression tests above. Upstream Git history is retained. Do not push these personal patches upstream
+or open a pull request unless explicitly requested.
