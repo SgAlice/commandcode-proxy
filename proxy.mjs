@@ -2180,6 +2180,31 @@ function responsesTextOf(content) {
   return content.map(p => (p && typeof p === 'object' ? (p.text || '') : '')).join('');
 }
 
+function responsesUserContentOf(content) {
+  // Keep the existing text-only representation, but never flatten input_image
+  // blocks into text. buildCcRequest already maps Chat image_url to CC image.
+  if (!Array.isArray(content) || !content.some(p => p?.type === 'input_image')) {
+    return responsesTextOf(content);
+  }
+  const parts = [];
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'input_image') {
+      if (typeof part.image_url !== 'string' || !part.image_url.trim()) {
+        throw Object.assign(new Error(
+          'input_image requires a non-empty image_url (image URL or data URI); file_id-only images are not supported'
+        ), { statusCode: 400 });
+      }
+      const image_url = { url: part.image_url };
+      if (part.detail !== undefined) image_url.detail = part.detail;
+      parts.push({ type: 'image_url', image_url });
+    } else if (typeof part.text === 'string') {
+      parts.push({ type: 'text', text: part.text });
+    }
+  }
+  return parts;
+}
+
 function responsesReasoningOf(item) {
   if (!item) return '';
   if (Array.isArray(item.summary) && item.summary.length) return item.summary.map(p => (p && p.text) || '').join('');
@@ -2239,7 +2264,7 @@ function convertResponsesToChat(respReq) {
             messages.push({ role: 'system', content: text });
           } else {
             flushPending();
-            messages.push({ role: 'user', content: text });
+            messages.push({ role: 'user', content: responsesUserContentOf(item.content) });
           }
           break;
         }
@@ -2592,7 +2617,14 @@ async function handleResponses(req, res) {
     return;
   }
 
-  let chatReq = convertResponsesToChat(respReq);
+  let chatReq;
+  try {
+    chatReq = convertResponsesToChat(respReq);
+  } catch (e) {
+    if (e.statusCode !== 400) throw e;
+    sendResponsesError(res, 400, 'invalid_request_error', e.message);
+    return;
+  }
   if (!chatReq.messages.length) {
     sendResponsesError(res, 400, 'invalid_request_error', 'input is required');
     return;

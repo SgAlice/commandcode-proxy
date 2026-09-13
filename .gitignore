@@ -7,4 +7,11 @@ AGENTS.md
 stdout.txt
 stderr.txt
 captured-requests/
-
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+backups/
+*.tar.gz

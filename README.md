@@ -1,5 +1,10 @@
 # Command Code Proxy
 
+> **Private maintained copy:** includes the Responses image-input fix and 18
+> regression tests. See [local changes and safe local-only deployment](LOCAL_CHANGES.md).
+> The upstream documentation is retained below; use `compose.local.yml` when the
+> proxy must remain accessible only on its host.
+
 > [中文文档](README_zh.md)
 
 A reverse proxy that converts Command Code API to OpenAI / Anthropic compatible endpoints. Single file, zero external dependencies.

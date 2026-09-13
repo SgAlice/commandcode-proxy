@@ -7,3 +7,10 @@ node_modules/
 temp/
 README*.md
 AGENTS.md
+.env
+.env.*
+*.pem
+*.key
+secrets/
+backups/
+*.tar.gz

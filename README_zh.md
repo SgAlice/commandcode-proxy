@@ -1,5 +1,9 @@
 # Command Code Proxy
 
+> **私人维护副本**：已修复 Responses 图片输入丢失问题，附带 18 项回归测试。
+> 修改说明、测试方式与仅限本机的部署方法见 [LOCAL_CHANGES.md](LOCAL_CHANGES.md)。
+> 下方保留上游文档；需要仅限本机访问时，请使用 `compose.local.yml`。
+
 > [English Docs](README.md)
 
 将 Command Code API 转换为 OpenAI / Anthropic 兼容接口的反代代理。单文件，零外部依赖。
