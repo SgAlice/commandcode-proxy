@@ -1,7 +1,9 @@
 # Command Code Proxy
 
-> **Private maintained copy:** includes the Responses image-input fix and 18
-> regression tests. See [local changes and safe local-only deployment](LOCAL_CHANGES.md).
+> **Personally maintained fork:** includes Responses image fixes and Codex
+> Responses Lite tool/message compatibility, with 59 regression tests. Encrypted
+> cross-provider delegation additionally requires parent-route compatibility.
+> See [local changes, limitations and safe local-only deployment](LOCAL_CHANGES.md).
 > The upstream documentation is retained below; use `compose.local.yml` when the
 > proxy must remain accessible only on its host.
 

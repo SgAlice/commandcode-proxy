@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { readFileSync, existsSync, appendFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { prepareResponsesCompatibility } from './responses-compat.mjs';
 
 // ── 配置加载 ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2216,7 +2217,7 @@ function newResponsesId(prefix) {
   return prefix + randomUUID().replace(/-/g, '').slice(0, 24);
 }
 
-function convertResponsesToChat(respReq) {
+function convertResponsesToChat(respReq, compatibility) {
   const messages = [];
   // CC's tested vision wire format is a user image part, not a text tool
   // result containing serialized base64. Defer attachments until the complete
@@ -2247,7 +2248,7 @@ function convertResponsesToChat(respReq) {
     pending = null;
   };
 
-  const input = respReq.input;
+  const input = compatibility.input;
   if (typeof input === 'string') {
     messages.push({ role: 'user', content: input });
   } else if (Array.isArray(input)) {
@@ -2304,8 +2305,7 @@ function convertResponsesToChat(respReq) {
           break;
         }
         default: {
-          log('warn', 'Unknown Responses input item type', { type: item.type });
-          break;
+          throw Object.assign(new Error(`Unsupported Responses input item type: ${item.type}`), { statusCode: 400 });
         }
       }
     }
@@ -2313,26 +2313,11 @@ function convertResponsesToChat(respReq) {
   flushPending();
   flushToolAttachments();
 
-  let tools;
-  if (Array.isArray(respReq.tools) && respReq.tools.length) {
-    tools = respReq.tools.filter(t => t && (t.type === 'function' || t.name)).map(t => ({
-      type: 'function',
-      function: {
-        name: t.name || '',
-        description: t.description || '',
-        parameters: t.parameters || { type: 'object', properties: {} },
-      },
-    }));
-    if (!tools.length) tools = undefined;
-  }
-
-  let toolChoice;
-  const tc = respReq.tool_choice;
-  if (typeof tc === 'string') toolChoice = tc;
-  else if (tc && typeof tc === 'object' && tc.name) toolChoice = { type: 'function', function: { name: tc.name } };
+  const tools = compatibility.tools;
+  const toolChoice = compatibility.toolChoice;
 
   const out = { model: respReq.model, messages, stream: respReq.stream === true };
-  if (tools) out.tools = tools;
+  if (tools.length) out.tools = tools;
   if (toolChoice) out.tool_choice = toolChoice;
   if (respReq.max_output_tokens !== undefined) out.max_tokens = respReq.max_output_tokens;
   if (respReq.temperature !== undefined) out.temperature = respReq.temperature;
@@ -2365,7 +2350,7 @@ function buildResponsesUsage(usage, fallbackOutputTokens) {
   };
 }
 
-function buildResponsesOutput(fullText, thinkingText, toolCalls) {
+function buildResponsesOutput(fullText, thinkingText, toolCalls, compatibility) {
   const output = [];
   if (thinkingText) {
     output.push({ type: 'reasoning', id: newResponsesId('rs_'), summary: [{ type: 'summary_text', text: thinkingText }] });
@@ -2378,12 +2363,7 @@ function buildResponsesOutput(fullText, thinkingText, toolCalls) {
   }
   for (const tc of (toolCalls || [])) {
     const rawArgs = tc.function ? tc.function.arguments : '{}';
-    output.push({
-      type: 'function_call', id: newResponsesId('fc_'), call_id: tc.id,
-      name: tc.function ? (tc.function.name || '') : '',
-      arguments: typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs || {}),
-      status: 'completed',
-    });
+    output.push(compatibility.outputCall(tc.function?.name || '', rawArgs, tc.id, newResponsesId('fc_')));
   }
   return output;
 }
@@ -2403,7 +2383,7 @@ function buildResponsesObject(responseId, model, created, fullText, thinkingText
     instructions: o.instructions === undefined ? null : o.instructions,
     max_output_tokens: o.max_output_tokens === undefined ? null : o.max_output_tokens,
     model,
-    output: buildResponsesOutput(fullText, thinkingText, toolCalls),
+    output: buildResponsesOutput(fullText, thinkingText, toolCalls, o.compatibility),
     output_text: fullText || '',
     parallel_tool_calls: true,
     previous_response_id: null,
@@ -2428,7 +2408,7 @@ function sendResponsesError(res, status, type, message, retryAfter) {
 }
 
 // CC NDJSON → Responses 具名 SSE 事件（每个事件都必需的 sequence_number 递增发送）
-function createResponsesSseTranslator(model, responseId, created) {
+function createResponsesSseTranslator(model, responseId, created, compatibility) {
   let seq = 0;
   const sse = (type, data) => 'event: ' + type + '\ndata: ' + JSON.stringify(Object.assign({ type, sequence_number: seq++ }, data)) + '\n\n';
   let createdSent = false;
@@ -2468,6 +2448,9 @@ function createResponsesSseTranslator(model, responseId, created) {
       item.status = 'completed';
     } else if (current.kind === 'function_call') {
       out.push(sse('response.function_call_arguments.done', { item_id: item.id, output_index: idx, arguments: item.arguments }));
+      item.status = 'completed';
+    } else if (current.kind === 'custom_tool_call') {
+      out.push(sse('response.custom_tool_call_input.done', { item_id: item.id, output_index: idx, input: item.input }));
       item.status = 'completed';
     } else if (current.kind === 'reasoning') {
       out.push(sse('response.reasoning_summary_text.done', { item_id: item.id, output_index: idx, summary_index: 0, text: current.textBuf }));
@@ -2551,15 +2534,16 @@ function createResponsesSseTranslator(model, responseId, created) {
         }
 
         case 'tool-call': {
-          if (!createdSent) out.push.apply(out, startResponse());
           const callId = event.toolCallId || newResponsesId('call_');
-          const args = typeof event.input === 'string' ? event.input : JSON.stringify(event.input || {});
-          out.push.apply(out, openItem('function_call', {
-            type: 'function_call', id: newResponsesId('fc_'), call_id: callId,
-            name: event.toolName || '', arguments: '', status: 'in_progress',
-          }));
-          current.item.arguments = args;
-          out.push(sse('response.function_call_arguments.delta', { item_id: current.item.id, output_index: current.index, delta: args }));
+          const item = compatibility.outputCall(event.toolName || '', event.input || {}, callId, newResponsesId('fc_'), 'in_progress');
+          if (!createdSent) out.push.apply(out, startResponse());
+          const custom = item.type === 'custom_tool_call';
+          const field = custom ? 'input' : 'arguments';
+          const value = item[field];
+          out.push.apply(out, openItem(item.type, { ...item, [field]: '' }));
+          current.item[field] = value;
+          out.push(sse(custom ? 'response.custom_tool_call_input.delta' : 'response.function_call_arguments.delta',
+            { item_id: current.item.id, output_index: current.index, delta: value }));
           break;
         }
 
@@ -2637,8 +2621,10 @@ async function handleResponses(req, res) {
   }
 
   let chatReq;
+  let compatibility;
   try {
-    chatReq = convertResponsesToChat(respReq);
+    compatibility = prepareResponsesCompatibility(respReq);
+    chatReq = convertResponsesToChat(respReq, compatibility);
   } catch (e) {
     if (e.statusCode !== 400) throw e;
     sendResponsesError(res, 400, 'invalid_request_error', e.message);
@@ -2654,6 +2640,7 @@ async function handleResponses(req, res) {
   const responseId = newResponsesId('resp_');
   const created = nowUnix();
   const echoOpts = {
+    compatibility,
     instructions: respReq.instructions === undefined ? null : respReq.instructions,
     max_output_tokens: respReq.max_output_tokens === undefined ? null : respReq.max_output_tokens,
     temperature: respReq.temperature,
@@ -2697,7 +2684,7 @@ async function handleResponses(req, res) {
     }
 
     if (stream) {
-      translator = createResponsesSseTranslator(model, responseId, created);
+      translator = createResponsesSseTranslator(model, responseId, created, compatibility);
       let buffer = '';
       let started = false;
       const decoder = new TextDecoder();
@@ -2789,6 +2776,7 @@ async function handleResponses(req, res) {
             return;
           }
           if (!res.writableEnded) {
+            for (const event of translator.fail(e.message)) res.write(event);
             try { res.write(translator.errorEvent(e.message)); } catch (e2) {}
           }
         }

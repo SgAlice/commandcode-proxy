@@ -6,6 +6,7 @@
   "license": "MIT",
   "main": "proxy.mjs",
   "scripts": {
+    "test": "node tests/responses-images.mjs && node tests/responses-codex.mjs",
     "start": "node proxy.mjs",
     "dev": "node --watch proxy.mjs",
     "docker:build": "docker build -t commandcode-proxy:latest .",

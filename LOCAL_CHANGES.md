@@ -32,10 +32,59 @@ parallel tool calls remain paired before the next user/assistant message.
 Invalid image URLs fail locally with HTTP 400. Ordinary tool outputs are unchanged.
 This is a compatibility representation, not native multimodal tool-result support.
 
+## Codex Responses Lite compatibility (2026-09-22)
+
+Checked upstream `master` and `release` at `cce214d`; neither handles
+`input[].additional_tools` or `agent_message`. This is a focused local fix, not
+a merge of unrelated upstream changes. The existing image fixes are retained.
+
+- Lift `additional_tools` into CC's function tool catalog, preserving ordinary
+  function schemas and flattening namespaces through a per-request alias map.
+- Convert plaintext `agent_message` content into user messages instead of
+  silently discarding delegated instructions.
+- Bridge custom/free-form tools through a required `{input: string}` parameter;
+  restore `custom_tool_call`, namespaces, input strings, call IDs and matching
+  tool-result history, including images. Streaming emits the corresponding
+  `response.custom_tool_call_input.delta/done` and output-item events.
+- Preserve tool grammar descriptions, but do not claim CC enforces Lark or
+  regex grammars. Malformed custom argument wrappers fail rather than producing
+  corrupted client calls. DSML text is never parsed or executed as a tool call.
+- Reject unsupported input/tool types instead of silently dropping them. Tool
+  aliases are request-local, deterministic and collision-resistant. Only known,
+  unambiguous original spellings are accepted as alternate upstream names.
+
+### Important: parent-agent encryption is a separate prerequisite
+
+This proxy cannot decrypt another provider's encrypted delegation payload.
+Third-party routes sometimes put **plaintext** into an `encrypted_content`
+carrier; that representation is normalized, not decrypted. Recognizable Fernet
+ciphertext is rejected with HTTP 400 and an actionable error, before contacting
+the model. Other cryptographic formats are not supported either.
+
+The **parent's** request route must disable message encryption before generating
+`collaboration.spawn_agent` / `send_message` / `followup_task` calls. Removing the
+`parameters.properties.message.encrypted` schema annotation is done for tools
+that actually pass through this bridge. It cannot affect a parent routed through
+a different provider. CLIProxyAPI's `codex.optimize-multi-agent-v2` is a separate
+gateway feature (including native collaboration namespace rewriting); it is not
+a Codex TOML setting or a setting implemented by this project. Configure equivalent
+compatibility on the parent route rather than adding that YAML option here.
+
+Live validation through an Aether gateway and `deepseek/deepseek-v4.1-flash`
+passed plaintext agent-message delivery and a namespaced custom-tool echo/result
+round trip, each with streaming on and off (six model requests). The tool was a
+synthetic echo; no model-generated code was executed by the test.
+
+Native cross-provider Codex sub-agent testing exposed real encrypted messages
+from the separately routed parent. That end-to-end scenario is **not fixed by
+this child-side proxy alone** and is not claimed as a successful sub-agent test.
+
 ## Validation
 
-26 network-isolated mock regression tests passed (including tool images, mixed
-content, parallel results, malformed tool images, and both streaming modes). Earlier live tests with
+59 mock regression tests passed (26 image tests and 33 Codex compatibility tests),
+including network-isolated execution in the deployment's Node 22 Docker runtime.
+The image cases include tool images, mixed content, parallel results, malformed
+tool images, and both streaming modes. Earlier live tests with
 `deepseek/deepseek-v4.1-flash` also passed for direct non-streaming Responses
 and streaming Responses through an Aether gateway, correctly recognizing a
 generated diagnostic image containing a red circle and a blue square.
@@ -51,7 +100,7 @@ docker build -t commandcode-proxy-private:test .
 docker run --rm --network none --read-only --user node \
   --cap-drop ALL --security-opt no-new-privileges:true \
   -v "$PWD/tests:/app/tests:ro" \
-  --entrypoint node commandcode-proxy-private:test /app/tests/responses-images.mjs
+  --entrypoint npm commandcode-proxy-private:test test
 ```
 
 ## Local-only deployment
