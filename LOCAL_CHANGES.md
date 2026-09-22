@@ -49,7 +49,8 @@ a merge of unrelated upstream changes. The existing image fixes are retained.
 - Preserve tool grammar descriptions, but do not claim CC enforces Lark or
   regex grammars. Malformed custom argument wrappers fail rather than producing
   corrupted client calls. DSML text is never parsed or executed as a tool call.
-- Reject unsupported input/tool types instead of silently dropping them. Tool
+- Reject unknown input/tool types instead of silently dropping them, with the
+  optional hosted-search compatibility exception documented below. Tool
   aliases are request-local, deterministic and collision-resistant. Only known,
   unambiguous original spellings are accepted as alternate upstream names.
 
@@ -98,7 +99,7 @@ endpoint were retained. The original URL was backed up outside the repository.
 
 ## Validation
 
-87 mock regression tests passed (26 image, 33 child compatibility, 28 parent tests),
+139 mock regression tests passed (26 image, 85 child/direct compatibility, 28 parent tests),
 including network-isolated execution in the deployment's Node 22 Docker runtime.
 The image cases include tool images, mixed content, parallel results, malformed
 tool images, and both streaming modes. Earlier live tests with
@@ -109,6 +110,52 @@ generated diagnostic image containing a red circle and a blue square.
 The tool-image fix was separately tested against the real model with a synthetic
 left-red/right-blue image in a `function_call_output`, using both streaming and
 non-streaming Responses. Both completed and correctly identified the colors.
+
+## Direct-call regression repairs (2026-09-22)
+
+The initial strict adapter introduced two regressions: an optional hosted
+`web_search` declaration rejected an otherwise ordinary request, and custom
+tool input was assumed to always be an object containing an `input` string.
+The earlier small smoke tests did not adequately cover these real workloads.
+
+- Optional `web_search` / `web_search_preview` declarations no longer reject an
+  ordinary Responses request. These OpenAI-hosted tools are **not implemented**
+  by this gateway; they are omitted with an explicit model-side capability notice
+  forbidding claims of browsing without real results. Other provided client tools
+  remain available. Explicitly forcing hosted search (or requiring tools when
+  only unsupported hosted search is offered) still returns a clear HTTP 400.
+  This does not simulate search, invent results, or add a search service.
+- Custom calls accept the canonical `{input: string}` wrapper, a serialized
+  wrapper, raw text and encoded text strings. Original JSON text, including `{}`,
+  remains free-form text rather than being mistaken for a broken wrapper.
+- Raw argument deltas are collected only for declared custom tools, bounded in
+  size, and associated with the exact call ID and tool identity. They can recover
+  the original text when the upstream final parsed input is empty. Missing text
+  and unrelated arbitrary objects still fail explicitly; no cmd/code fields are
+  guessed or rewritten into executable code. The proxy never executes tools.
+- Common namespace aliases are readable (`functions__exec`) instead of long
+  opaque hashes, reducing model misspellings. Collisions and invalid/long names
+  retain deterministic encoded aliases. Exact previous aliases remain accepted.
+- Ordinary JSON function arguments are not unwrapped. Chat Completions and
+  Anthropic Messages handlers are unchanged. Nullable optional `tools` remains
+  compatible with plain Responses requests. The parent proxy is unchanged.
+
+Validation includes the three direct API formats, streaming and non-streaming,
+ordinary functions, images, multi-turn custom history, parallel/interleaved raw
+tool input, invalid data, collision handling, and unavailable hosted search.
+Live candidate tests covered plain and optional-search Responses, ordinary
+Chat Completions and Messages in both streaming modes, and generated custom
+calls. Two final native child tasks each completed three real tool/result rounds,
+including database-file reads, Unicode, quoting and JSON output. Their session
+records and candidate logs were checked: no stream error or model-request retry
+was recorded for those final probes. Earlier failing candidate probes were not
+counted as passing validation.
+
+Deployment uses a temporary loopback candidate endpoint to keep the old service
+handling existing requests. Before replacing the original container, route new
+requests to the verified candidate and wait for old connections to drain. Restore
+the original endpoint URLs after the replacement is healthy, then retire the
+temporary service. Keep the previous image, source and endpoint URLs for rollback.
 
 Re-run the mock tests without credentials or external network access:
 

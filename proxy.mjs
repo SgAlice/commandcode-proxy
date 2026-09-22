@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 import { readFileSync, existsSync, appendFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { prepareResponsesCompatibility } from './responses-compat.mjs';
+import { prepareResponsesCompatibility, createToolInputCollector } from './responses-compat.mjs';
 
 // ── 配置加载 ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2219,6 +2219,7 @@ function newResponsesId(prefix) {
 
 function convertResponsesToChat(respReq, compatibility) {
   const messages = [];
+  if (compatibility.capabilityNotice) messages.push({ role: 'system', content: compatibility.capabilityNotice });
   // CC's tested vision wire format is a user image part, not a text tool
   // result containing serialized base64. Defer attachments until the complete
   // adjacent tool-result batch is emitted (parallel calls must remain paired).
@@ -2363,7 +2364,7 @@ function buildResponsesOutput(fullText, thinkingText, toolCalls, compatibility) 
   }
   for (const tc of (toolCalls || [])) {
     const rawArgs = tc.function ? tc.function.arguments : '{}';
-    output.push(compatibility.outputCall(tc.function?.name || '', rawArgs, tc.id, newResponsesId('fc_')));
+    output.push(compatibility.outputCall(tc.function?.name || '', rawArgs, tc.id, newResponsesId('fc_'), 'completed', tc.rawInput));
   }
   return output;
 }
@@ -2409,6 +2410,7 @@ function sendResponsesError(res, status, type, message, retryAfter) {
 
 // CC NDJSON → Responses 具名 SSE 事件（每个事件都必需的 sequence_number 递增发送）
 function createResponsesSseTranslator(model, responseId, created, compatibility) {
+  const toolInputs = createToolInputCollector({ acceptName: compatibility.isCustomTool });
   let seq = 0;
   const sse = (type, data) => 'event: ' + type + '\ndata: ' + JSON.stringify(Object.assign({ type, sequence_number: seq++ }, data)) + '\n\n';
   let createdSent = false;
@@ -2502,7 +2504,11 @@ function createResponsesSseTranslator(model, responseId, created, compatibility)
       this.lastCcEvent = event.type;
       const out = [];
 
+      toolInputs.observe(event);
+
       switch (event.type) {
+        case 'tool-input-start': case 'tool-input-delta': case 'tool-input-end':
+          break;
         case 'text-start': case 'reasoning-start': case 'start': case 'start-step':
           break;
 
@@ -2535,7 +2541,7 @@ function createResponsesSseTranslator(model, responseId, created, compatibility)
 
         case 'tool-call': {
           const callId = event.toolCallId || newResponsesId('call_');
-          const item = compatibility.outputCall(event.toolName || '', event.input || {}, callId, newResponsesId('fc_'), 'in_progress');
+          const item = compatibility.outputCall(event.toolName || '', event.input ?? {}, callId, newResponsesId('fc_'), 'in_progress', toolInputs.take(event));
           if (!createdSent) out.push.apply(out, startResponse());
           const custom = item.type === 'custom_tool_call';
           const field = custom ? 'input' : 'arguments';
@@ -2623,7 +2629,9 @@ async function handleResponses(req, res) {
   let chatReq;
   let compatibility;
   try {
-    compatibility = prepareResponsesCompatibility(respReq);
+    compatibility = prepareResponsesCompatibility(respReq, {
+      onRawInputRecovery: () => log('info', 'Recovered custom tool input from matched raw deltas'),
+    });
     chatReq = convertResponsesToChat(respReq, compatibility);
   } catch (e) {
     if (e.statusCode !== 400) throw e;
@@ -2793,6 +2801,7 @@ async function handleResponses(req, res) {
       let finishReason = 'stop';
       let upstreamError = null;
       const toolCalls = [];
+      const toolInputs = createToolInputCollector({ acceptName: compatibility.isCustomTool });
       reader = ccResponse.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
@@ -2805,17 +2814,20 @@ async function handleResponses(req, res) {
           if (!trimmed || trimmed === '[DONE]' || trimmed.startsWith(':')) continue;
           let event;
           try { event = JSON.parse(trimmed); } catch (e2) { continue; }
+          toolInputs.observe(event);
           switch (event.type) {
+            case 'tool-input-start': case 'tool-input-delta': case 'tool-input-end': break;
             case 'text-delta': lastCcEvent = event.type; fullText += event.text || ''; break;
             case 'reasoning-delta': lastCcEvent = event.type; thinkingText += event.text || ''; break;
             case 'tool-call': {
               lastCcEvent = event.type;
               toolCalls.push({
+                rawInput: toolInputs.take(event),
                 id: event.toolCallId || ('call_' + randomUUID().slice(0, 8)),
                 type: 'function',
                 function: {
                   name: event.toolName || '',
-                  arguments: typeof event.input === 'string' ? event.input : JSON.stringify(event.input || {}),
+                  arguments: event.input ?? {},
                 },
               });
               break;
