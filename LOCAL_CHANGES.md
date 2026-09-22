@@ -67,21 +67,38 @@ The **parent's** request route must disable message encryption before generating
 that actually pass through this bridge. It cannot affect a parent routed through
 a different provider. CLIProxyAPI's `codex.optimize-multi-agent-v2` is a separate
 gateway feature (including native collaboration namespace rewriting); it is not
-a Codex TOML setting or a setting implemented by this project. Configure equivalent
-compatibility on the parent route rather than adding that YAML option here.
+a Codex TOML setting or a YAML setting implemented by this project. The optional
+[parent compatibility service](PARENT_COMPAT.md) now provides a native Responses
+adaptation on that separate route; do not add the CLIProxyAPI YAML option here.
 
 Live validation through an Aether gateway and `deepseek/deepseek-v4.1-flash`
 passed plaintext agent-message delivery and a namespaced custom-tool echo/result
 round trip, each with streaming on and off (six model requests). The tool was a
 synthetic echo; no model-generated code was executed by the test.
 
-Native cross-provider Codex sub-agent testing exposed real encrypted messages
-from the separately routed parent. That end-to-end scenario is **not fixed by
-this child-side proxy alone** and is not claimed as a successful sub-agent test.
+Initial native cross-provider testing exposed real encrypted messages from the
+separately routed parent. The child-side adapter alone cannot fix that scenario.
+After adding the separate parent service, two actual Codex child tasks passed:
+a plaintext arithmetic/sentinel task, and a real shell `printf` invocation with
+exit code 0. The second child's session record contains a native namespaced
+`custom_tool_call` followed by its matching `custom_tool_call_output`, not DSML
+text pretending to be a call. Both tasks used the existing child model mapping.
+
+## Optional parent service (2026-09-22)
+
+`parent-proxy.mjs` and `codex-parent-compat.mjs` implement the parent route in this
+same repository. `Dockerfile.parent` / `compose.parent.yml` run it in a separate,
+loopback-only container on port 3051. The original child container on port 3050
+remains independent. See [setup, protocol boundaries and rollback](PARENT_COMPAT.md).
+
+Native parent traffic through the new service was verified before dispatching
+the two child probes. Only the gateway's parent Responses endpoint base URL was
+changed, using its admin API; provider credentials, model mappings and the child
+endpoint were retained. The original URL was backed up outside the repository.
 
 ## Validation
 
-59 mock regression tests passed (26 image tests and 33 Codex compatibility tests),
+87 mock regression tests passed (26 image, 33 child compatibility, 28 parent tests),
 including network-isolated execution in the deployment's Node 22 Docker runtime.
 The image cases include tool images, mixed content, parallel results, malformed
 tool images, and both streaming modes. Earlier live tests with

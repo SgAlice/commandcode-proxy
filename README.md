@@ -1,8 +1,9 @@
 # Command Code Proxy
 
 > **Personally maintained fork:** includes Responses image fixes and Codex
-> Responses Lite tool/message compatibility, with 59 regression tests. Encrypted
-> cross-provider delegation additionally requires parent-route compatibility.
+> Responses Lite tool/message compatibility, with 87 regression tests. The optional
+> [parent compatibility service](PARENT_COMPAT.md) enables plaintext cross-provider
+> delegation without changing the upstream operator's configuration.
 > See [local changes, limitations and safe local-only deployment](LOCAL_CHANGES.md).
 > The upstream documentation is retained below; use `compose.local.yml` when the
 > proxy must remain accessible only on its host.

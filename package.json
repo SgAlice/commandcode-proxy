@@ -6,7 +6,9 @@
   "license": "MIT",
   "main": "proxy.mjs",
   "scripts": {
-    "test": "node tests/responses-images.mjs && node tests/responses-codex.mjs",
+    "test": "node tests/responses-images.mjs && node tests/responses-codex.mjs && node --test tests/parent-compat.mjs",
+    "start:parent": "node parent-proxy.mjs",
+    "test:parent": "node --test tests/parent-compat.mjs",
     "start": "node proxy.mjs",
     "dev": "node --watch proxy.mjs",
     "docker:build": "docker build -t commandcode-proxy:latest .",

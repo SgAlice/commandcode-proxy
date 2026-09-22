@@ -1,0 +1,7 @@
+FROM node:22-alpine
+WORKDIR /app
+COPY parent-proxy.mjs codex-parent-compat.mjs ./
+USER node
+HEALTHCHECK --interval=15s --timeout=3s --start-period=3s --retries=3 \
+  CMD wget --spider http://127.0.0.1:3051/health || exit 1
+CMD ["node", "parent-proxy.mjs"]

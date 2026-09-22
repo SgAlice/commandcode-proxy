@@ -1,0 +1,22 @@
+name: commandcode-parent
+services:
+  parent-compat:
+    build:
+      context: .
+      dockerfile: Dockerfile.parent
+    container_name: commandcode-parent-compat
+    network_mode: host
+    environment:
+      PARENT_HOST: "127.0.0.1"
+      PARENT_PORT: "3051"
+      PARENT_UPSTREAM_BASE: "${PARENT_UPSTREAM_BASE:?Set the original upstream base URL including /v1}"
+    restart: unless-stopped
+    user: "node"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
